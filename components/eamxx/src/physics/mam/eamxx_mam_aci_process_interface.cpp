@@ -1,4 +1,5 @@
 #include <physics/mam/eamxx_mam_aci_process_interface.hpp>
+#include <share/util/eamxx_timing.hpp>
 
 // ACI functions are stored in the following hpp file
 #include <physics/mam/eamxx_mam_aci_functions.hpp>
@@ -512,20 +513,28 @@ void MAMAci::run_impl(const double dt) {
   // FIXME: Temporary assignment of nc
   mam_coupling::copy_view_lev_slice(team_policy, wet_atm_.nc, nlev_,  // inputs
                                     nc_inp_to_aci_);                  // output
-
+  
+  start_timer("mamaci::compute_w0_and_rho");
   compute_w0_and_rho(team_policy, dry_atm_, top_lev_, nlev_,
                      // output
                      w0_, rho_);
+  Kokkos::fence();  
+  stop_timer("mamaci::compute_w0_and_rho");
 
+  start_timer("mamaci::compute_tke_at_interfaces");
   compute_tke_at_interfaces(team_policy, w_sec_mid_, dry_atm_.dz, nlev_,
                             w_sec_int_,
                             // output
                             tke_);
-
   Kokkos::fence();  // wait for tke_ to be computed.
+  stop_timer("mamaci::compute_tke_at_interfaces");
+
+  start_timer("mamaci::compute_subgrid_scale_velocities");
   compute_subgrid_scale_velocities(team_policy, tke_, wsubmin_, top_lev_, nlev_,
                                    // output
                                    wsub_, wsubice_, wsig_);
+  Kokkos::fence(); 
+  stop_timer("mamaci::compute_subgrid_scale_velocities");
 
   // We need dry diameter for only aitken mode
   Kokkos::deep_copy(
@@ -537,6 +546,7 @@ void MAMAci::run_impl(const double dt) {
   //  Compute Ice nucleation
   //  NOTE: The Fortran version uses "ast" for cloud fraction which is
   //  equivalent to "cldfrac_tot" in FM. It is part of the "dry_atm_" struct
+  start_timer("mamaci::compute_nucleate_ice_tendencies");
   compute_nucleate_ice_tendencies(
       nucleate_ice_, team_policy, dry_atm_, dry_aero_, wsubice_,
       aitken_dry_dia_, nlev_, dt,
@@ -544,12 +554,17 @@ void MAMAci::run_impl(const double dt) {
       nihf_, niim_, nidep_, nimey_, naai_hom_,
       // ## output to be used by the other processes ##
       naai_);
+  Kokkos::fence(); 
+  stop_timer("mamaci::compute_nucleate_ice_tendencies");
 
   // Compute cloud fractions based on cloud threshold
+  start_timer("mamaci::store_liquid_cloud_fraction");
   store_liquid_cloud_fraction(team_policy, dry_atm_, liqcldf_, liqcldf_prev_,
                               top_lev_, nlev_,
                               // output
                               cloud_frac_, cloud_frac_prev_);
+  Kokkos::fence();
+  stop_timer("mamaci::store_liquid_cloud_fraction");
 
   mam_coupling::compute_recipical_pseudo_density(team_policy, dry_atm_.p_del,
                                                  nlev_,
@@ -561,6 +576,7 @@ void MAMAci::run_impl(const double dt) {
   //  Compute activated CCN number tendency (tendnd_) and updated
   //  cloud borne aerosols (stored in a work array) and interstitial
   //  aerosols tendencies
+  start_timer("mamaci::call_function_dropmixnuc");
   call_function_dropmixnuc(
       team_policy, dt, dry_atm_, rpdel_, kvh_mid_, kvh_int_, wsub_, cloud_frac_,
       cloud_frac_prev_, dry_aero_, nlev_, top_lev_, enable_aero_vertical_mix_,
@@ -572,6 +588,7 @@ void MAMAci::run_impl(const double dt) {
       raercol_cw_, raercol_, state_q_work_, nact_, mact_,
       dropmixnuc_scratch_mem_);
   Kokkos::fence();  // wait for ptend_q_ to be computed.
+  stop_timer("mamaci::call_function_dropmixnuc"); 
 
   Kokkos::deep_copy(ccn_0p02_,
                     Kokkos::subview(ccn_, Kokkos::ALL(), Kokkos::ALL(), 0));
@@ -593,6 +610,7 @@ void MAMAci::run_impl(const double dt) {
   //---------------------------------------------------------------------------
 
   // Compute hetrozenous freezing
+  start_timer("mamaci::call_hetfrz_compute_tendencies");
   call_hetfrz_compute_tendencies(
       team_policy, hetfrz_, dry_atm_, dry_aero_, factnum_, dt, nlev_,
       // ## output to be used by the other processes ##
@@ -600,20 +618,28 @@ void MAMAci::run_impl(const double dt) {
       hetfrz_deposition_nucleation_tend_,
       // work arrays
       diagnostic_scratch_);
+  Kokkos::fence();  
+  stop_timer("mamaci::call_hetfrz_compute_tendencies");
 
   //---------------------------------------------------------------
   // Now update interstitial and cloud borne aerosols
   //---------------------------------------------------------------
 
   // Update cloud borne aerosols
+  start_timer("mamaci::update_cloud_borne_aerosols");
   update_cloud_borne_aerosols(qqcw_fld_work_, nlev_,
                               // output
                               dry_aero_);
+  Kokkos::fence();  
+  stop_timer("mamaci::update_cloud_borne_aerosols");
 
   // Update interstitial aerosols using tendencies
+  start_timer("mamaci::update_interstitial_aerosols");
   update_interstitial_aerosols(team_policy, ptend_q_, nlev_, dt,
                                // output
                                dry_aero_);
+  Kokkos::fence();
+  stop_timer("mamaci::update_interstitial_aerosols"); 
 
   // call post processing to convert dry mixing ratios to wet mixing ratios
 
