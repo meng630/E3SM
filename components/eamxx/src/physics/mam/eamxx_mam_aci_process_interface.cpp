@@ -504,9 +504,11 @@ void MAMAci::run_impl(const double dt) {
 
   // preprocess input -- needs a scan for the calculation of local derivied
   // quantities
+  start_timer("mamaci::preprocess");
   Kokkos::parallel_for("preprocess", scan_policy, preprocess_);
 
   Kokkos::fence();
+  stop_timer("mamaci::preprocess");
 
   haero::ThreadTeamPolicy team_policy(ncol_, Kokkos::AUTO);
 
@@ -642,9 +644,10 @@ void MAMAci::run_impl(const double dt) {
   stop_timer("mamaci::update_interstitial_aerosols"); 
 
   // call post processing to convert dry mixing ratios to wet mixing ratios
-
+  start_timer("mamaci::post_process");
   post_process(wet_aero_, dry_aero_, dry_atm_);
   Kokkos::fence();  // wait before returning to calling function
+  stop_timer("mamaci::post_process"); 
 }
 
 }  // namespace scream
